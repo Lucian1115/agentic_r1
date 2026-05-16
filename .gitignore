@@ -1,0 +1,34 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Training results (models, checkpoints, test results)
+results/
+
+# Base model (re-downloadable, large binary files)
+Qwen2.5-3B-Instruct-Local/
+
+# Weights & Biases logs
+wandb/
+
+# Unsloth compiled cache
+unsloth_compiled_cache/
+
+# Claude Code local settings
+.claude/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+.msc
+._____temp
