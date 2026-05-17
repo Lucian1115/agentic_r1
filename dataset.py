@@ -6,23 +6,11 @@ from config import (
     USD_CURRENCY_MARKERS,
     CURRENCY_CNY,
     DATASET_CONFIG,
+    NAME_PREFIXES,
 )
+from utils import surname_unique_count, validate_pinyin_map
 
-random.seed(42)
-
-
-def is_usd_query(text):
-    return any(marker in text for marker in USD_CURRENCY_MARKERS)
-
-
-def validate_pinyin_map():
-    if not isinstance(PINYIN_MAP, dict):
-        raise TypeError("PINYIN_MAP 必须是字典类型")
-    for name, pinyin in PINYIN_MAP.items():
-        if not isinstance(name, str) or not isinstance(pinyin, str):
-            raise ValueError(f"映射表条目必须为字符串对: {name} -> {pinyin}")
-        if len(name) == 0 or len(pinyin) == 0:
-            raise ValueError(f"映射表中不应包含空字符串: {name} -> {pinyin}")
+random.seed(DATASET_CONFIG["random_seed"])
 
 
 # ── 金额格式化 ──────────────────────────────────────────────
@@ -34,17 +22,8 @@ def _format_amount_str(amount, currency):
       - "¥100"（CNY 前缀）
       - "100 美元"（普通 USD）
       - "$100"（USD 前缀）
-      - "一百块"（中文口语金额）
     """
     cfg = DATASET_CONFIG
-
-    # 中文口语金额：从映射表中随机取匹配范围内的键
-    if currency in CURRENCY_CNY and random.random() < cfg.get("chinese_amount_probability", 0):
-        chinese_map = cfg.get("chinese_numeral_map", {})
-        valid_keys = [k for k in chinese_map if cfg["amount_min"] <= k <= cfg["amount_max"]]
-        if valid_keys:
-            key = random.choice(valid_keys)
-            return chinese_map[key]
 
     # ¥ / $ 前缀格式
     if random.random() < cfg.get("amount_prefix_probability", 0):
@@ -58,16 +37,13 @@ def _format_amount_str(amount, currency):
 
 
 # ── 人名格式化 ──────────────────────────────────────────────
-def _surname_unique_count(surname):
-    return sum(1 for n in PINYIN_MAP if n[0] == surname)
-
-
 def _format_name(name):
     """可选地在人名前添加称呼前缀（仅当姓氏在映射中唯一时，避免歧义）。"""
     if random.random() < DATASET_CONFIG.get("name_prefix_probability", 0):
         surname = name[0]
-        if _surname_unique_count(surname) == 1:
-            prefix = random.choice(["老", "小"])
+        if surname_unique_count(surname, PINYIN_MAP) == 1:
+            gen_prefixes = DATASET_CONFIG.get("name_prefixes", ("老", "小"))
+            prefix = random.choice(gen_prefixes)
             return prefix + surname
     return name
 
@@ -85,7 +61,8 @@ def _random_amount():
 def generate_training_data():
     """生成多样化的训练数据集。
 
-    涵盖：20 种查询模板、18 个人名、多种金额格式、称呼前缀、负样本。
+    涵盖：23 种查询模板、18 个人名、多种金额格式、称呼前缀、负样本、
+    名字消歧样本、困难名字过采样。
     """
     print("生成多样化训练数据...")
     validate_pinyin_map()
@@ -94,6 +71,10 @@ def generate_training_data():
     names = list(PINYIN_MAP.keys())
     templates = list(cfg["query_templates"])
     negative_templates = list(cfg.get("negative_templates", []))
+    disambiguation_templates = list(cfg.get("disambiguation_templates", []))
+    confusable_pairs = cfg.get("confusable_name_pairs", {})
+    hard_names = set(cfg.get("hard_names", []))
+    oversample_ratio = cfg.get("hard_name_oversample_ratio", 1.0)
     raw_data = []
 
     for _ in range(cfg["num_samples"]):
@@ -107,18 +88,48 @@ def generate_training_data():
             continue
 
         # 正样本
-        name = random.choice(names)
-        amount = _random_amount()
+        # ── 困难名字过采样 ──
+        if hard_names and random.random() < cfg.get("hard_name_sample_probability", 0.3):
+            name_pool = [n for n in names if n in hard_names]
+            name_weights = [oversample_ratio if n in hard_names else 1.0 for n in name_pool]
+            name = random.choices(name_pool, weights=name_weights, k=1)[0]
+        else:
+            name = random.choice(names)
+
         display_name = _format_name(name)
 
+        # ── 货币与金额生成 ──
         if random.random() < cfg["usd_probability"]:
             currency = random.choice(USD_CURRENCY_MARKERS)
         else:
             currency = random.choice(CURRENCY_CNY)
 
-        amount_str = _format_amount_str(amount, currency)
-        tpl = random.choice(templates)
-        query = tpl.format(name=display_name, amount_str=amount_str)
+        # 中文口语金额：直接从映射表选键作为实际金额，使 5% 概率真正生效
+        use_chinese = False
+        chinese_map = cfg.get("chinese_numeral_map", {})
+        if currency in CURRENCY_CNY and random.random() < cfg.get("chinese_amount_probability", 0):
+            valid_keys = [k for k in chinese_map if cfg["amount_min"] <= k <= cfg["amount_max"]]
+            if valid_keys:
+                amount = float(random.choice(valid_keys))
+                amount_str = chinese_map[int(amount)]
+                use_chinese = True
+
+        if not use_chinese:
+            amount = _random_amount()
+            amount_str = _format_amount_str(amount, currency)
+
+        # ── 名字消歧模板 ──
+        if disambiguation_templates and random.random() < cfg.get("disambiguation_probability", 0):
+            confusable = confusable_pairs.get(name)
+            if confusable:
+                tpl = random.choice(disambiguation_templates)
+                query = tpl.format(name=display_name, confusable=confusable, amount_str=amount_str)
+            else:
+                tpl = random.choice(templates)
+                query = tpl.format(name=display_name, amount_str=amount_str)
+        else:
+            tpl = random.choice(templates)
+            query = tpl.format(name=display_name, amount_str=amount_str)
 
         prompt = SYSTEM_PROMPT + f"\nUser: {query}\nAssistant: "
         raw_data.append({"prompt": prompt, "is_negative": False})
