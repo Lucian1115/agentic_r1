@@ -28,7 +28,6 @@ def levenshtein_ratio(s1, s2):
     if not s1 or not s2:
         return 0.0
     len1, len2 = len(s1), len(s2)
-    # DP 只用两行，节省内存
     prev = list(range(len2 + 1))
     curr = [0] * (len2 + 1)
     for i in range(1, len1 + 1):
@@ -45,7 +44,7 @@ def levenshtein_ratio(s1, s2):
 
 
 def extract_tool_data(completion):
-    """从模型输出中提取 <tool_call> 内的 JSON 工具调用数据。"""
+    """从模型输出中提取 <tool_call> 内的 JSON。"""
     if isinstance(completion, list) and len(completion) > 0 and isinstance(completion[-1], dict):
         completion = completion[-1].get("content", "")
     completion = str(completion)
@@ -93,7 +92,7 @@ def extract_tool_data(completion):
 
 
 def is_cny_amount_format(amount_str):
-    """校验 amount 是否为人民币格式（必须以 ¥ 或 ￥ 开头，且不含美元标记）。"""
+    """校验 amount 是否以 ¥/￥ 开头且不含美元标记。"""
     if amount_str is None:
         return False
     text = str(amount_str).strip()
@@ -108,7 +107,7 @@ def is_cny_amount_format(amount_str):
 
 
 def normalize_cny_amount(amount_str):
-    """仅接受人民币金额格式，并规范化为统一的 ¥xx.xx 形式。"""
+    """将人民币金额规范化为 ¥xx.xx。"""
     if not is_cny_amount_format(amount_str):
         return None
     text = str(amount_str)
@@ -127,19 +126,14 @@ def surname_unique_count(surname, pinyin_map):
 
 
 def extract_name_from_query(user_query, pinyin_map):
-    """按名字长度降序匹配用户输入中的姓名。
+    """从用户输入中提取姓名。
 
-    支持：
-    - 精确匹配（如 "张三"）
-    - 称呼前缀匹配（如 "老张" → 仅在姓氏唯一时匹配，避免歧义）
-    - 括号补充（如 "老王（王五）" → 括号内的名字直接命中）
+    按长度降序精确匹配，支持称呼前缀（老/小+姓，仅姓氏唯一时生效）。
     """
-    # 1) 精确匹配
     for name in sorted(pinyin_map.keys(), key=len, reverse=True):
         if name in user_query:
             return name
 
-    # 2) 称呼前缀匹配：老/小/大/阿 + 姓氏（仅当该姓氏在映射中唯一）
     for prefix in NAME_PREFIXES:
         for name in sorted(pinyin_map.keys(), key=len, reverse=True):
             surname = name[0]
@@ -150,12 +144,11 @@ def extract_name_from_query(user_query, pinyin_map):
     return None
 
 
-# 中文口语金额 → 数值的映射（在模块加载时从 config 构建）
 _CHINESE_NUMERAL_REVERSE = {}
 
 
 def _init_chinese_numeral_map():
-    """延迟加载中文金额映射，避免循环导入。"""
+    """延迟加载中文口语金额映射。"""
     global _CHINESE_NUMERAL_REVERSE
     if _CHINESE_NUMERAL_REVERSE:
         return
@@ -164,8 +157,7 @@ def _init_chinese_numeral_map():
 
 
 def extract_query_amount(user_query):
-    """从用户语句中提取转账金额（支持数字和中文口语金额如"一百块"）。"""
-    # 优先尝试正则匹配数字金额
+    """从用户语句中提取转账金额，支持数字和中文口语（如"一百块"）。"""
     amount_match = re.search(REGEX_CONFIG["query_amount_pattern"], user_query)
     if amount_match:
         try:
@@ -175,8 +167,8 @@ def extract_query_amount(user_query):
         except (ValueError, TypeError):
             pass
 
-    # 回退：查找中文口语金额（按长度降序，避免"五十块"被"十块"子串匹配）
     _init_chinese_numeral_map()
+    # 按长度降序匹配，避免"五十块"被"十块"子串误命中
     for chinese_str, value in sorted(
         _CHINESE_NUMERAL_REVERSE.items(), key=lambda x: len(x[0]), reverse=True
     ):
@@ -209,7 +201,7 @@ def has_valid_r1_format(completion):
 
 
 def find_latest_lora_result(results_base_dir="results"):
-    """在 results/ 中找到最新的 Agentic_R1_Lora_* 目录。"""
+    """返回 results/ 下最新的 Agentic_R1_Lora_* 目录。"""
     if not os.path.isdir(results_base_dir):
         return None
     candidates = [
@@ -223,10 +215,7 @@ def find_latest_lora_result(results_base_dir="results"):
 
 
 def resolve_model_path(user_input, results_base_dir="results"):
-    """解析用户输入为实际模型路径。
-
-    支持：完整的相对/绝对路径，或 results/ 下的子目录名。
-    """
+    """将用户输入解析为模型路径：支持完整路径或 results/ 子目录名。"""
     if user_input is None:
         return None
     if os.path.isdir(user_input):
@@ -239,13 +228,12 @@ def resolve_model_path(user_input, results_base_dir="results"):
 
 
 def save_code_snapshot(output_dir, source_dir="."):
-    """将当前项目所有 .py 文件快照保存到训练输出目录。"""
+    """保存项目 .py 文件和 git commit hash 到训练输出目录。"""
     snapshot_dir = os.path.join(output_dir, "code_snapshot")
     os.makedirs(snapshot_dir, exist_ok=True)
     for py_file in glob.glob(os.path.join(source_dir, "*.py")):
         if os.path.isfile(py_file):
             shutil.copy2(py_file, snapshot_dir)
-    # 记录 git commit hash
     try:
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -258,15 +246,13 @@ def save_code_snapshot(output_dir, source_dir="."):
         pass
 
 
-# ── KL 散度本地日志器（不输出到终端） ──
 class KLLogger:
-    """将 KL 散度超标告警写入本地文件，不在终端输出。"""
+    """KL 散度超标时写入本地日志文件，不在终端输出。"""
 
     def __init__(self, log_path: str, threshold: float = 0.08):
         self.log_path = log_path
         self.threshold = threshold
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        # 确保 logger 只写文件不传播到 root
         self._logger = logging.getLogger(f"kl_monitor_{id(self)}")
         self._logger.propagate = False
         self._logger.setLevel(logging.WARNING)
@@ -283,7 +269,6 @@ class KLLogger:
             )
 
 
-# ── Checkpoint 路径管理 ──
 def get_checkpoint_dir(output_dir: str):
     return os.path.join(output_dir, "checkpoints")
 
@@ -297,7 +282,7 @@ def get_final_ckpt_path(output_dir: str):
 
 
 def save_peft_checkpoint(trainer, path: str):
-    """保存当前 LoRA 权重与 tokenizer 到指定路径，覆盖已有。"""
+    """保存 LoRA 权重与 tokenizer，覆盖已有。"""
     import io, contextlib
     if os.path.isdir(path):
         shutil.rmtree(path)
@@ -307,7 +292,6 @@ def save_peft_checkpoint(trainer, path: str):
         trainer.processing_class.save_pretrained(path)
 
 
-# ── PINYIN_MAP 校验 ──────────────────────────────────────────
 def validate_pinyin_map():
     if not isinstance(PINYIN_MAP, dict):
         raise TypeError("PINYIN_MAP 必须是字典类型")
@@ -318,9 +302,8 @@ def validate_pinyin_map():
             raise ValueError(f"映射表中不应包含空字符串: {name} -> {pinyin}")
 
 
-# ── Prompt 解析 ──────────────────────────────────────────────
 def extract_user_query(prompt):
-    """从 prompt 中提取 User: 行的用户查询文本。"""
+    """从 prompt 中提取 User: 行的查询文本。"""
     if isinstance(prompt, list) and len(prompt) > 0 and isinstance(prompt[-1], dict):
         prompt = prompt[-1].get("content", "")
     prompt = str(prompt)
@@ -331,7 +314,7 @@ def extract_user_query(prompt):
 
 
 def is_negative_prompt(prompt):
-    """检测 prompt 是否不包含有效的转账请求（如负样本 / 闲聊）。"""
+    """检测 prompt 是否缺少有效转账请求（闲聊/查询类负样本）。"""
     user_query = extract_user_query(prompt)
     if not user_query:
         return True
@@ -340,7 +323,6 @@ def is_negative_prompt(prompt):
     return name is None or amount is None
 
 
-# ── 金额格式化 ────────────────────────────────────────────────
 def format_cny_value(value):
     return f"¥{float(value):.2f}"
 
@@ -351,13 +333,11 @@ def amounts_equal(expected, actual):
     return bool(exp_norm and act_norm and exp_norm == act_norm)
 
 
-# ── Think 块分析 ─────────────────────────────────────────────
 def has_calc_signal(text):
-    """判断思路中是否真的出现了计算或换算信号。"""
+    """检查 think 文本中是否包含计算或换算信号。"""
     return bool(re.search(r"[+\-*/×=]|乘|算|计算|换算|折合|得出|所以|因此", text))
 
 
-# 匹配金额上下文中的数字：币种标记、计算表达式等
 _AMOUNT_CTX_RE = re.compile(
     r"(?:[¥￥$]|人民币|CNY|USD|usd|元|块|美元|美金|美刀)\s*(\d+(?:\.\d+)?)"
     r"|(\d+(?:\.\d+)?)\s*(?:[¥￥$]|人民币|CNY|元|块|美元|美金|美刀)"
@@ -368,7 +348,7 @@ _AMOUNT_CTX_RE = re.compile(
 
 
 def extract_amount_numbers(text):
-    """从 think 文本中提取出现在金额/计算上下文中的数字，避免误匹配无关数字（如日期）。"""
+    """从 think 文本中提取金额/计算上下文中的数字，过滤日期等无关数字。"""
     nums = set()
     for m in _AMOUNT_CTX_RE.finditer(text):
         for g in m.groups():
@@ -377,7 +357,6 @@ def extract_amount_numbers(text):
     return list(nums)
 
 
-# ── 期望答案计算 ──────────────────────────────────────────────
 def expected_answer(query):
     name = extract_name_from_query(query, PINYIN_MAP)
     amount = extract_query_amount(query)
@@ -392,9 +371,8 @@ def expected_answer(query):
     return pinyin, final_amount
 
 
-# ── 迭代辅助 ──────────────────────────────────────────────────
 def iter_prompt_completion(prompts, completions, logger):
-    """遍历样本并在长度不一致时告警，避免 zip 静默截断。"""
+    """zip(prompts, completions)，长度不一致时告警，避免静默截断。"""
     prompt_len = len(prompts)
     completion_len = len(completions)
     if prompt_len != completion_len:

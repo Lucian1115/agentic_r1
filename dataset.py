@@ -13,32 +13,21 @@ from utils import surname_unique_count, validate_pinyin_map
 random.seed(DATASET_CONFIG["random_seed"])
 
 
-# ── 金额格式化 ──────────────────────────────────────────────
 def _format_amount_str(amount, currency):
-    """将数值金额与货币组合成多样化的表达。
-
-    返回字符串填入模板的 {amount_str} 占位。可能产生：
-      - "100 块钱" / "100 元"（普通 CNY）
-      - "¥100"（CNY 前缀）
-      - "100 美元"（普通 USD）
-      - "$100"（USD 前缀）
-    """
+    """格式化金额+货币为模板用的 amount_str，如 "¥100"、"100 块钱"、"$50"。"""
     cfg = DATASET_CONFIG
 
-    # ¥ / $ 前缀格式
     if random.random() < cfg.get("amount_prefix_probability", 0):
         if currency in CURRENCY_CNY:
-            return f"¥{amount:g}"  # :g 去尾随零
+            return f"¥{amount:g}"
         else:
             return f"${amount:g}"
 
-    # 默认：数值 + 货币
     return f"{amount:g} {currency}"
 
 
-# ── 人名格式化 ──────────────────────────────────────────────
 def _format_name(name):
-    """可选地在人名前添加称呼前缀（仅当姓氏在映射中唯一时，避免歧义）。"""
+    """人名前随机加称呼前缀（老/小+姓），仅姓氏唯一时生效。"""
     if random.random() < DATASET_CONFIG.get("name_prefix_probability", 0):
         surname = name[0]
         if surname_unique_count(surname, PINYIN_MAP) == 1:
@@ -48,7 +37,6 @@ def _format_name(name):
     return name
 
 
-# ── 金额生成 ──────────────────────────────────────────────
 def _random_amount():
     cfg = DATASET_CONFIG
     if random.random() < cfg.get("decimal_amount_probability", 0):
@@ -57,13 +45,8 @@ def _random_amount():
     return float(random.randint(cfg["amount_min"], cfg["amount_max"]))
 
 
-# ── 主生成函数 ──────────────────────────────────────────────
 def generate_training_data():
-    """生成多样化的训练数据集。
-
-    涵盖：23 种查询模板、18 个人名、多种金额格式、称呼前缀、负样本、
-    名字消歧样本、困难名字过采样。
-    """
+    """生成训练数据集：多模板 × 多人名 × 多种金额格式，含负样本和消歧样本。"""
     print("生成多样化训练数据...")
     validate_pinyin_map()
 
@@ -78,7 +61,6 @@ def generate_training_data():
     raw_data = []
 
     for _ in range(cfg["num_samples"]):
-        # 负样本：无转账意图的查询
         if negative_templates and random.random() < cfg.get("negative_sample_probability", 0):
             tpl = random.choice(negative_templates)
             name = random.choice(names) if "{name}" in tpl else ""
@@ -87,8 +69,6 @@ def generate_training_data():
             raw_data.append({"prompt": prompt, "is_negative": True})
             continue
 
-        # 正样本
-        # ── 困难名字过采样 ──
         if hard_names and random.random() < cfg.get("hard_name_sample_probability", 0.3):
             name_pool = [n for n in names if n in hard_names]
             name_weights = [oversample_ratio if n in hard_names else 1.0 for n in name_pool]
@@ -98,13 +78,11 @@ def generate_training_data():
 
         display_name = _format_name(name)
 
-        # ── 货币与金额生成 ──
         if random.random() < cfg["usd_probability"]:
             currency = random.choice(USD_CURRENCY_MARKERS)
         else:
             currency = random.choice(CURRENCY_CNY)
 
-        # 中文口语金额：直接从映射表选键作为实际金额，使 5% 概率真正生效
         use_chinese = False
         chinese_map = cfg.get("chinese_numeral_map", {})
         if currency in CURRENCY_CNY and random.random() < cfg.get("chinese_amount_probability", 0):
@@ -118,7 +96,6 @@ def generate_training_data():
             amount = _random_amount()
             amount_str = _format_amount_str(amount, currency)
 
-        # ── 名字消歧模板 ──
         if disambiguation_templates and random.random() < cfg.get("disambiguation_probability", 0):
             confusable = confusable_pairs.get(name)
             if confusable:

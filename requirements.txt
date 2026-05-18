@@ -1,0 +1,14 @@
+datasets
+numpy
+packaging
+pandas
+peft
+psutil
+torch
+tqdm
+transformers
+triton
+trl
+unsloth
+unsloth_zoo
+vllm

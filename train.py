@@ -55,23 +55,16 @@ from utils import (
 if is_wandb_available():
     import wandb
 
-# ==========================================
-# 生成训练数据集
-# ==========================================
 FORMAT_REWARD_WEIGHT = REWARD_WEIGHTS["format"]
 PINYIN_REWARD_WEIGHT = REWARD_WEIGHTS["pinyin"]
 AMOUNT_REWARD_WEIGHT = REWARD_WEIGHTS["amount"]
 SELF_CORRECTION_REWARD_WEIGHT = REWARD_WEIGHTS["self_correction"]
 
 
-# =========================================================
-# 奖励函数 1：R1 格式校验（保持二值，权重降低）
-# =========================================================
 def format_reward_func(prompts, completions, **kwargs):
-    """判断每个 completion 是否符合 R1 格式要求。
+    """R1 格式校验（二值）。
 
-    正样本：要求 <think> + <tool_call> JSON。
-    负样本（无转账意图）：正确行为是不输出 tool_call，得满分。
+    正样本要求 <think> + <tool_call> JSON；负样本不输出 tool_call 得满分。
     """
     rewards = []
     logger = logging.getLogger(__name__)
@@ -89,15 +82,8 @@ def format_reward_func(prompts, completions, **kwargs):
     return rewards
 
 
-# =========================================================
-# 奖励函数 2：拼音部分匹配奖励（平滑梯度）
-# =========================================================
 def pinyin_reward_func(prompts, completions, **kwargs):
-    """对拼音进行编辑距离归一化的部分匹配奖励。
-
-    消除原先"全有或全无"的二值信号，提供平滑梯度。
-    负样本：正确行为是不输出 tool_call，得满分 1.0。
-    """
+    """拼音编辑距离归一化奖励，提供平滑梯度取代二值信号。"""
     rewards = []
     logger = logging.getLogger(__name__)
 
@@ -149,15 +135,8 @@ def pinyin_reward_func(prompts, completions, **kwargs):
     return rewards
 
 
-# =========================================================
-# 奖励函数 3：金额近似匹配奖励（平滑梯度）
-# =========================================================
 def amount_reward_func(prompts, completions, **kwargs):
-    """对最终金额进行相对误差归一化的部分匹配奖励。
-
-    误差 < 1% → 满分 1.0，< 10% → 线性衰减，>= 10% → 0。
-    负样本：正确行为是不输出 tool_call，得满分 1.0。
-    """
+    """金额相对误差奖励: <1% 满分, <10% 线性衰减, >=10% 归零。"""
     rewards = []
     logger = logging.getLogger(__name__)
 
@@ -225,21 +204,11 @@ def amount_reward_func(prompts, completions, **kwargs):
     return rewards
 
 
-# =========================================================
-# 奖励函数 4：思路过程校验（阶梯评分 + CNY 过度换算惩罚）
-# =========================================================
 def self_correction_reward_func(prompts, completions, **kwargs):
-    """阶梯式评估 <think> 区块质量，并对 CNY 的过度换算施加惩罚。
+    """<think> 质量阶梯评分 + CNY 过度换算惩罚。
 
-    评分阶梯（正样本）：
-      - 无 think → 0.0
-      - 有 think 无计算信号 → 0.2
-      - 有计算信号但结果错误 → 0.4
-      - 有计算信号且结果正确（USD 缺汇率提示）→ 0.7
-      - 完整且正确 → 1.0
-
-    CNY 过度换算惩罚：若 CNY 查询的 think 中出现汇率/USD 标记，
-    结果正确也降为最高 0.3（模型学会了"见到金额就 ×7"的偏差）。
+    阶梯：无 think=0, 有 think 无计算=0.2, 算错=0.4, USD 缺汇率=0.7, 全对=1.0。
+    CNY 查询出现汇率/USD 标记封顶 0.3（防止"见金额就 ×7"的偏差）。
     """
     rewards = []
     logger = logging.getLogger(__name__)
@@ -337,7 +306,6 @@ def self_correction_reward_func(prompts, completions, **kwargs):
     return rewards
 
 
-# ── 加权包装 ──
 def weighted_format_reward(prompts, completions, **kwargs):
     base = format_reward_func(prompts, completions, **kwargs)
     return [r * FORMAT_REWARD_WEIGHT for r in base]
@@ -358,9 +326,7 @@ def weighted_self_correction_reward(prompts, completions, **kwargs):
     return [r * SELF_CORRECTION_REWARD_WEIGHT for r in base]
 
 
-# =========================================================
-# 本地指标 CSV 回调：每步保存核心监测指标到本地文件
-# =========================================================
+# 每步写入本地 CSV 的指标列
 _METRIC_FIELDS = [
     "step",
     "reward",
@@ -381,18 +347,15 @@ _METRIC_FIELDS = [
 
 
 class LocalMetricsCallback(TrainerCallback):
-    """每步将核心训练指标追加到本地 CSV，方便离线查看。
+    """每步将 GRPOTrainer 内置指标写入本地 CSV。
 
-    trl 的 GRPOTrainer 已内置计算以下指标：
-      - reward / reward_std / frac_reward_zero_std （含族内方差）
-      - completions/mean(min/max)_length（回答长度统计）
-      - kl / entropy / clip_ratio_* / loss / grad_norm
-    本回调只做"从 logs 中提取并写入 CSV"这一件事。
+    GRPOTrainer 已计算好 reward、reward_std、kl、entropy、loss、grad_norm 等，
+    本回调只做提取和持久化。
     """
 
     def __init__(self, csv_path: str):
         self.csv_path = csv_path
-        self._header = None  # 首次写时确定
+        self._header = None
 
     def _init_header(self, logs_keys):
         available = [f for f in _METRIC_FIELDS if f in logs_keys]
@@ -416,14 +379,8 @@ class LocalMetricsCallback(TrainerCallback):
             writer.writerow(row)
 
 
-# =========================================================
-# 本地 Completion 样本回调：每 N 步保存一次（不上传 wandb）
-# =========================================================
 class LocalCompletionsCallback(TrainerCallback):
-    """周期性将 completion 样本保存为本地 JSONL 文件。
-
-    取代原先的 wandb.Table，用户不想在 wandb 看到大表格。
-    """
+    """每 N 步保存 completion 样本到本地 JSONL，替代 wandb.Table。"""
 
     def __init__(self, output_dir: str, log_steps: int = 50):
         self.output_dir = output_dir
@@ -467,18 +424,12 @@ class LocalCompletionsCallback(TrainerCallback):
                 f.write(json.dumps(s, ensure_ascii=False) + "\n")
 
 
-# =========================================================
-# 周期性评估回调：轻量级监测微调效果
-# =========================================================
 class PeriodicEvalCallback(TrainerCallback):
-    """每隔 eval_steps 步用固定测试集做一次贪婪解码评估。
+    """每 eval_steps 步用固定测试集做贪婪解码评估。
 
-    结果写入 wandb（eval/* 指标）和本地 JSONL 文件，不在终端输出。
-    仅评估 20 条查询 × 1 次推理，对训练速度影响 < 1%。
+    结果写入 wandb 和本地 JSONL，不在终端打印。20 条 × 1 次推理，开销 <1%。
 
-    同时负责：
-      - 跟踪并覆盖保存最优 checkpoint（pass_rate 最高时触发）
-      - 将 KL 散度超标告警写入本地文件（不输出终端）
+    同时负责：跟踪最优 checkpoint（按 pass_rate）并覆盖保存；KL 超标写本地日志。
     """
 
     def __init__(self, model, tokenizer, eval_queries, output_dir, eval_steps=50,
@@ -491,12 +442,10 @@ class PeriodicEvalCallback(TrainerCallback):
         self.results_path = os.path.join(output_dir, "eval_metrics.jsonl")
         self._device = None
 
-        # ── 最优 checkpoint 追踪 ──
         self._best_pass_rate = -1.0
         self._best_step = -1
         self._best_ckpt_path = get_best_ckpt_path(output_dir)
 
-        # ── KL 日志器（只写文件，不输出终端） ──
         kl_log_path = os.path.join(output_dir, "kl_warnings.log")
         self._kl_logger = KLLogger(kl_log_path, threshold=kl_warning_threshold)
         self._trainer = None
@@ -513,7 +462,7 @@ class PeriodicEvalCallback(TrainerCallback):
         return torch.device("cpu")
 
     def _eval_one(self, query):
-        """贪婪解码单条查询，返回与 compute_metrics 兼容的记录。"""
+        """贪婪解码单条查询，返回 compute_metrics 兼容的记录。"""
         prompt = SYSTEM_PROMPT + f"\nUser: {query}\nAssistant: "
         inputs = self.tokenizer([prompt], return_tensors="pt").to(self._get_device())
 
@@ -556,7 +505,7 @@ class PeriodicEvalCallback(TrainerCallback):
         }
 
     def on_log(self, args, state, control, logs=None, **kwargs):
-        """每步检查 KL 散度，超标则写入本地日志（不输出终端）。"""
+        """每步检查 KL，超标写本地日志。"""
         if logs is None:
             return
         kl = logs.get("kl")
@@ -586,7 +535,6 @@ class PeriodicEvalCallback(TrainerCallback):
         metrics = compute_metrics(records)
         pass_rate = metrics["overall"]["pass_rate"]
 
-        # ── 记录到 wandb ──
         if is_wandb_available() and wandb.run is not None:
             wandb.log({
                 "eval/pass_rate": pass_rate,
@@ -598,18 +546,15 @@ class PeriodicEvalCallback(TrainerCallback):
                 "step": state.global_step,
             })
 
-        # ── 本地保存完整 metrics ──
         os.makedirs(self.output_dir, exist_ok=True)
         with open(self.results_path, "a") as f:
             entry = {"step": state.global_step, "metrics": metrics}
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-        # ── 最优 checkpoint：覆盖保存 ──
         if self._trainer is not None and pass_rate > self._best_pass_rate:
             self._best_pass_rate = pass_rate
             self._best_step = state.global_step
             save_peft_checkpoint(self._trainer, self._best_ckpt_path)
-            # 将元信息写入旁边的小文件，方便 test.py 定位
             meta_path = self._best_ckpt_path + "_meta.json"
             with open(meta_path, "w") as f:
                 json.dump({
@@ -624,23 +569,15 @@ def main():
     base_output_name = GRPO_TRAINING_CONFIG["output_dir"]
     output_dir = os.path.join(RESULTS_BASE_DIR, f"{base_output_name}_{timestamp}")
 
-    # 保存代码快照供事后分析
     save_code_snapshot(output_dir)
 
-    # ==========================================
-    # 生成训练数据集
-    # ==========================================
     train_dataset = generate_training_data()
 
-    # ==========================================
-    # 加载 Unsloth 量化模型
-    # ==========================================
     print("正在加载 Qwen2.5-3B 模型与 LoRA 适配器...")
     max_seq_length = TRAIN_MODEL_CONFIG["max_seq_length"]
 
     torch_dtype = getattr(torch, TRAIN_MODEL_CONFIG["torch_dtype"])
 
-    # 使用配置中的精度与量化选项加载模型
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name = TRAIN_MODEL_CONFIG["base_model_name"],
         max_seq_length = max_seq_length,
@@ -658,9 +595,6 @@ def main():
         use_gradient_checkpointing = LORA_CONFIG["use_gradient_checkpointing"],
     )
 
-    # ==========================================
-    # 配置并启动 GRPO 训练
-    # ==========================================
     training_args = GRPOConfig(
         learning_rate = GRPO_TRAINING_CONFIG["learning_rate"],
         lr_scheduler_type = GRPO_TRAINING_CONFIG["lr_scheduler_type"],
@@ -681,13 +615,13 @@ def main():
         wandb_log_unique_prompts = GRPO_TRAINING_CONFIG["wandb_log_unique_prompts"],
         generation_kwargs = GRPO_TRAINING_CONFIG["generation_kwargs"],
         log_level = GRPO_TRAINING_CONFIG.get("log_level", "passive"),
+        save_strategy = "no",
     )
 
-    # trl 0.24.0 要求模型具备 warnings_issued 属性（transformers 5.5.0 尚未提供）
+    # trl 0.24.0 要求 warnings_issued 属性，transformers 5.5.0 尚未提供
     if not hasattr(model, "warnings_issued"):
         model.warnings_issued = {}
-    # 消除每步的 max_new_tokens vs max_length 冲突告警
-    model.generation_config.max_length = None
+    model.generation_config.max_length = None  # 消除 max_new_tokens vs max_length 冲突告警
 
     trainer = GRPOTrainer(
         model = model,
@@ -697,13 +631,12 @@ def main():
         processing_class = tokenizer,
     )
 
-    # 禁用 ProgressCallback 中每步打印 metrics 的行为（保留进度条，wandb 仍正常记录）
+    # 禁用 ProgressCallback 的每步 metrics 打印，保留进度条
     for cb in trainer.callback_handler.callbacks:
         if isinstance(cb, ProgressCallback):
             cb.on_log = lambda *args, **kwargs: None
             break
 
-    # 注册 completion 抽样回调 → 本地 JSONL 保存（不上传 wandb 表格）
     completions_dir = os.path.join(output_dir, "completions_samples")
     completion_callback = LocalCompletionsCallback(
         completions_dir, log_steps=GRPO_TRAINING_CONFIG.get("completions_log_steps", 50)
@@ -711,12 +644,10 @@ def main():
     completion_callback.bind_trainer(trainer)
     trainer.add_callback(completion_callback)
 
-    # 注册指标 CSV 回调 → 每步保存核心指标到本地
     metrics_csv = os.path.join(output_dir, "training_metrics.csv")
     metrics_callback = LocalMetricsCallback(metrics_csv)
     trainer.add_callback(metrics_callback)
 
-    # 注册周期性评估回调 → 轻量级监测微调效果（wandb + 本地 + 最优 checkpoint）
     eval_queries = list(TEST_CONFIG["eval_queries"])
     eval_steps = GRPO_TRAINING_CONFIG.get("eval_steps", 50)
     kl_threshold = GRPO_TRAINING_CONFIG.get("kl_warning_threshold", 0.08)
@@ -732,15 +663,12 @@ def main():
     print(f"  KL 超标日志 → {os.path.join(output_dir, 'kl_warnings.log')}")
     trainer.train()
 
-    # ── 保存最终 checkpoint ──
     final_ckpt_path = get_final_ckpt_path(output_dir)
     save_peft_checkpoint(trainer, final_ckpt_path)
-    # 记录元信息
     with open(final_ckpt_path + "_meta.json", "w") as f:
         json.dump({"step": GRPO_TRAINING_CONFIG["max_steps"]}, f)
 
-    # 也保存一份到 output_dir 根目录（兼容 test.py 的自动查找）
-    model.save_pretrained(output_dir)
+    model.save_pretrained(output_dir)  # 兼容 test.py 的自动查找
     tokenizer.save_pretrained(output_dir)
 
     print(f"训练完成，模型已保存至: {output_dir}")

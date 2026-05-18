@@ -33,9 +33,8 @@ from utils import (
 )
 
 
-# ── 测试集生成 ──────────────────────────────────────────────
 def generate_test_queries(seed=None):
-    """用固定种子生成覆盖全面的测试集，与训练数据生成逻辑解耦。"""
+    """用固定种子生成覆盖性测试集，与训练数据生成逻辑解耦。"""
     cfg = TEST_CONFIG
     random.seed(seed if seed is not None else cfg["seed"])
     names = sorted(PINYIN_MAP.keys())
@@ -45,7 +44,6 @@ def generate_test_queries(seed=None):
 
     queries = []
 
-    # 每个名字 × 每个金额档位 × 每种货币 → 系统性覆盖
     for name in names:
         for amount in test_amounts[:num_amounts]:  # CNY
             currency = random.choice(CURRENCY_CNY)
@@ -100,7 +98,6 @@ def evaluate_single(query, model, tokenizer, device):
     }
 
 
-# ── 模型加载与测试 ──────────────────────────────────────────
 def load_model(model_name):
     torch_dtype = getattr(torch, INFERENCE_CONFIG["torch_dtype"])
     model, tokenizer = FastLanguageModel.from_pretrained(
@@ -143,11 +140,9 @@ def compute_metrics(results):
     pinyin_ok = sum(1 for r in results if r["pinyin_ok"])
     amount_ok = sum(1 for r in results if r["amount_ok"])
 
-    # 按货币类型分类
     cny_results = [r for r in results if not r["is_usd"]]
     usd_results = [r for r in results if r["is_usd"]]
 
-    # 按名字分类
     by_name = {}
     for name in sorted(PINYIN_MAP.keys()):
         name_results = [r for r in results if r["name"] == name]
@@ -204,10 +199,7 @@ def compute_metrics(results):
 
 
 def print_report(model_results, num_queries):
-    """打印多模型对比报告。
-
-    model_results: list of (label, metrics) tuples，第一个为基座模型。
-    """
+    """打印多模型对比报告。model_results 首项为基座模型。"""
     print("\n" + "=" * 60)
     model_labels = [label for label, _ in model_results]
     print(f"  模型对比测试报告 ({num_queries} 条, greedy decoding)")
@@ -251,10 +243,7 @@ def print_report(model_results, num_queries):
 
 
 def save_results(base_metrics, ft_variants, base_name, output_dir, num_queries):
-    """保存多模型对比结果。
-
-    ft_variants: dict mapping label → (model_path, metrics)
-    """
+    """保存多模型对比结果到 JSON。ft_variants: {label: (path, metrics)}"""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output = {
         "timestamp": timestamp,
@@ -278,7 +267,7 @@ def save_results(base_metrics, ft_variants, base_name, output_dir, num_queries):
 
 
 def _load_and_eval(model_path, device, test_queries, label):
-    """加载模型、评估、卸载，返回 metrics。"""
+    """加载模型 → 评估 → 卸载 → 返回 metrics。"""
     print(f"\n加载{label}: {model_path}")
     model, tokenizer = load_model(model_path)
     model.to(device)
@@ -290,7 +279,6 @@ def _load_and_eval(model_path, device, test_queries, label):
     return metrics
 
 
-# ── 主流程 ──────────────────────────────────────────────────
 def main():
     import argparse
 
@@ -314,23 +302,20 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # 生成测试集
     test_queries = generate_test_queries()
     print(f"测试集: {len(test_queries)} 条\n")
 
-    # ── 基座模型 ──
     base_name = TRAIN_MODEL_CONFIG["base_model_name"]
     base_metrics = _load_and_eval(base_name, device, test_queries, "基座模型")
 
-    # ── 微调变体: 最优 checkpoint + 最后 checkpoint ──
     best_path = get_best_ckpt_path(ft_output_dir)
     final_path = get_final_ckpt_path(ft_output_dir)
 
     best_exists = os.path.isdir(best_path)
     final_exists = os.path.isdir(final_path)
 
-    ft_variants = {}  # label → (path, metrics)
-    model_results = [("基座模型", base_metrics)]  # for print_report
+    ft_variants = {}
+    model_results = [("基座模型", base_metrics)]
 
     if final_exists:
         metrics = _load_and_eval(final_path, device, test_queries, "最后模型")
@@ -338,14 +323,11 @@ def main():
         model_results.append(("最后模型 (final)", metrics))
 
     if best_exists:
-        # 判断 best 是否与 final 相同（通过比较路径或直接覆盖 label）
         if final_exists and os.path.samefile(best_path, final_path):
-            # best == final，不重复评估
             ft_variants["finetuned_best"] = (best_path, ft_variants["finetuned_final"][1])
         else:
             metrics = _load_and_eval(best_path, device, test_queries, "最优模型")
             ft_variants["finetuned_best"] = (best_path, metrics)
-            # 如果 best != final，把 best 也插入 model_results（final 已在）
             if final_exists:
                 model_results.insert(1, ("最优模型 (best)", metrics))
             else:
@@ -354,7 +336,6 @@ def main():
     if not ft_variants:
         print("警告: 未找到任何微调 checkpoint (best_model / final_model)，仅测试基座模型。")
 
-    # ── 输出 ──
     print_report(model_results, len(test_queries))
     save_results(base_metrics, ft_variants, base_name, ft_output_dir, len(test_queries))
 

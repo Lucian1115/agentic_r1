@@ -53,9 +53,8 @@ def main():
         print(f"错误: checkpoint 目录不存在: {source_path}")
         sys.exit(1)
 
-    # 导出目标：results/Agentic_R1_Merged_16bit_<timestamp>/
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    merged_dir = os.path.join(RESULTS_BASE_DIR, f"Agentic_R1_Merged_{label}_{timestamp}")
+    merged_dir = os.path.join(base_dir, f"Agentic_R1_Merged_{label}_{timestamp}")
 
     print(f"加载{label}模型: {source_path}")
     torch_dtype = getattr(torch, EXPORT_CONFIG["torch_dtype"])
