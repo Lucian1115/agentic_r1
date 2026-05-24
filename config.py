@@ -175,7 +175,7 @@ GRPO_TRAINING_CONFIG = {
     "generation_batch_size": 8,
     "max_prompt_length": 640,
     "max_completion_length": 768,
-    "max_steps": 1500,
+    "max_steps": 1000, # 1500
     "output_dir": "Agentic_R1_Lora",
     "report_to": "wandb",
     "beta": 0.06,
